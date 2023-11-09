@@ -1,0 +1,79 @@
+!nvidia-smi #recommended gpus are p100 and T4
+!git clone https://github.com/xinntao/ESRGAN
+from google.colab import drive
+drive.mount('/content/gdrive')
+!mkdir -p /content/ESRGAN/video_input
+%cd /content/ESRGAN/video_input
+from google.colab import files
+uploaded = files.upload() 
+for filename in uploaded.keys():
+  print('User uploaded file "{name}" with {length} bytes'.format(name=filename, length=len(uploaded[filename])))
+%cd /content/ESRGAN/LR
+!ffmpeg  -i /content/ESRGAN/video_input/* %04d.png
+import gdown
+print("Downloading pretrained models")
+output1 = '/content/ESRGAN/models/RRDB_ESRGAN_x4.pth'
+output2 = '/content/ESRGAN/models/RRDB_PSNR_x4.pth'
+output3 = '/content/ESRGAN/models/PPON_D.pth'
+output4 = '/content/ESRGAN/models/PPON_G.pth'
+print ('Downloading RRDB_ESRGAN_x4.pth')
+gdown.download('https://drive.google.com/uc?id=1TPrz5QKd8DHHt1k8SRtm6tMiPjz_Qene', output1, quiet=True) 
+print ('Downloading RRDB_PSNR_x4.pth')
+gdown.download('https://drive.google.com/uc?id=1pJ_T-V1dpb1ewoEra1TGSWl5e6H7M4NN', output2, quiet=True)
+print ('Downloading PPON_D.pth by Zheng Hui')
+gdown.download('https://drive.google.com/uc?id=1Fr5aKCD6mw6P-hI0BZr6My2gHNhtUk-V', output3, quiet=True) 
+print ('Downloading PPON_G.pth by Zheng Hui')
+gdown.download('https://drive.google.com/uc?id=12uR3BSftNA0HDYiKda23GyAj_crpSjOm', output4, quiet=True)  
+#@title Upscale images/video frames
+%cd /content/ESRGAN
+
+import os.path as osp
+import glob
+import cv2
+import numpy as np
+import torch
+import RRDBNet_arch as arch
+import requests
+import imageio
+import requests
+import warnings
+warnings.filterwarnings("ignore")
+from google.colab import files
+
+Choose_device = "cuda"  #@param ["cuda","cpu"]
+
+model_path = 'models/RRDB_PSNR_x4.pth' #@param ['models/RRDB_ESRGAN_x4.pth','models/RRDB_PSNR_x4.pth','models/PPON_G.pth','models/PPON_D.pth']  
+device = torch.device(Choose_device) 
+
+
+test_img_folder = 'LR/*'
+
+model = arch.RRDBNet(3, 3, 64, 23, gc=32)
+model.load_state_dict(torch.load(model_path), strict=True)
+model.eval()
+model = model.to(device)
+
+print('Model path {:s}. \nTesting...'.format(model_path))
+
+idx = 0
+for path in glob.glob(test_img_folder):
+    idx += 1
+    base = osp.splitext(osp.basename(path))[0]
+    print(idx, base)
+    # read images
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    img = img * 1.0 / 255
+    img = torch.from_numpy(np.transpose(img[:, :, [2, 1, 0]], (2, 0, 1))).float()
+    img_LR = img.unsqueeze(0)
+    img_LR = img_LR.to(device)
+
+    with torch.no_grad():
+        output = model(img_LR).data.squeeze().float().cpu().clamp_(0, 1).numpy()
+    output = np.transpose(output[[2, 1, 0], :, :], (1, 2, 0))
+    output = (output * 255.0).round()
+    cv2.imwrite('results/{:s}.png'.format(base), output)
+!ffmpeg -f image2 -framerate 25 -i /content/ESRGAN/results/%04d.png -c:v h264_nvenc -preset slow -qp 18 -pix_fmt yuv420p output.mp4
+from google.colab import files
+
+!zip -r results.zip /content/ESRGAN/results
+files.download('results.zip')
